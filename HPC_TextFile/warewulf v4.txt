@@ -1,0 +1,227 @@
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Warewulf provisioning tool installation:
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+prerequisite: 1. Add two network addaptors (the one with public and second one in private network)
+------------  2. firewalld must be disable.
+		  3. Also Selinux must be disable.
+		  4. update your device.
+		($ sudo systemctl stop firewalld
+		 $ sudo systemctl disable firewalld)
+
+Listing 1: Warewulf Installation:
+--------------------------------
+
+$ sudo yum install -y https://repo.ctrliq.com/rhel/8/ciq-release.rpm
+$ yum install -y warewulf
+
+Listing 2: warewulf.conf:
+------------------------
+$ sudo vim /etc/warewulf/warewulf.conf
+
+
+ WW_INTERNAL: 43
+ipaddr: 10.0.0.1
+netmask: 255.255.252.0
+network: 10.0.0.0
+warewulf:
+  port: 9873
+  secure: false
+  update interval: 60
+  autobuild overlays: true
+  host overlay: true
+  syslog: false
+  datastore: ""
+dhcp:
+  enabled: true
+  template: default
+  range start: 10.0.1.1
+  range end: 10.0.1.255
+  systemd name: dhcpd
+tftp:
+  enabled: true
+  tftproot: ""
+  systemd name: tftp
+nfs:
+  enabled: true
+  export paths:
+  - path: /home
+    export options: rw,sync
+    mount options: defaults
+    mount: true
+  - path: /opt
+    export options: ro,sync,no_root_squash
+    mount options: defaults
+    mount: false
+  systemd name: nfs-server
+
+The default warewulf.conf can be different because it will be based on the IP addresses of the primary NIC in the head node. You will likely have to edit the file, so I’ll walk you through that.
+
+I made the network 10.0.0.0 so that it can address anything I am likely to put on the cluster network. You can pick whatever you want to match the number of nodes you think you are likely to need or use.
+
+he next thing I changed was the range of cluster IP addresses. In the dhcp section of warewulf.conf, I changed the range start point to 10.0.1.1 and the last point to 10.0.1.255. If you need to go larger than 254 nodes, you can change the range end to a different IP address (e.g., 10.0.255.255, which would give you 65,636 nodes). Just be sure the subnet mask matches the address range.
+
+Take a look the subsequent sections, particularly the nfs section. By default, Warewulf exports /home and /opt. You can NFS export whatever you want.
+
+Another file in /etc/warewulf is worth mentioning: nodes.conf is a simple, flat text file in YAML format that acts as the database of the compute nodes (pretty much anything that gets an image from Warewulf).
+
+
+Listing 3: Initializing Warewulf:
+---------------------------------
+
+At this point, Warewulf has been installed and configured. Now you can initialize it and have it start the needed system services.
+
+
+$ sudo wwctl configure --all
+
+
+
+[sudo] password for laytonjb: 
+Building overlay for localhost.localdomain: host
+Enabling and restarting the DHCP services
+Created symlink /etc/systemd/system/multi-user.target.wants/dhcpd.service --> /usr/lib/systemd/system/dhcpd.service.
+Building overlay for localhost.localdomain: host
+Enabling and restarting the NFS services
+Created symlink /etc/systemd/system/multi-user.target.wants/nfs-server.service --> /usr/lib/systemd/system/nfs-server.service.
+Updating system keys
+Setting up key: ssh_host_rsa_key
+Setting up key: ssh_host_dsa_key
+Setting up key: ssh_host_ecdsa_key
+Setting up key: ssh_host_ed25519_key
+Skipping, authorized_keys already exists: /root/.ssh/authorized_keys
+Writing PXE files to: /var/lib/tftpboot/warewulf
+Enabling and restarting the TFTP services
+Created symlink /etc/systemd/system/sockets.target.wants/tftp.socket --> /usr/lib/systemd/system/tftp.socket.
+
+
+
+Listing 4: Checking Service:
+----------------------------
+
+$ sudo systemctl status dhcpd
+
+$ sudo systemctl status tftp
+
+$ sudo systemctl status nfs-server
+
+If the services are not running, the commands
+
+$ sudo systemctl enable --now tftp
+$ sudo systemctl start tftp
+
+
+
+
+Listing 5: Starting the Warewulf Daemon:
+---------------------------------------
+
+$ sudo systemctl enable --now warewulfd
+Created symlink /etc/systemd/system/multi-user.target.wants/warewulfd.service --> /usr/lib/systemd/system/warewulfd.service.
+
+$ sudo wwctl server status
+SERV   : Warewulf server is running at PID: 5127
+
+
+At this point, all services should be up and running. If you like, look at the Warewulf logs, which should be pretty empty because the cluster is newly created:
+
+$ sudo more /var/log/warewulfd.log 
+[Sat Nov  5 08:53:25 EDT 2022] SERV   : Starting HTTPD REST service on port 9873
+
+
+Now you're ready to tackle the compute nodes.
+
+
+Listing 6: Pull Container on Docker Hub:
+----------------------------------------
+
+
+$ sudo wwctl container import docker://warewulf/rocky rocky-8
+
+
+$ sudo wwctl container list
+CONTAINER NAME            NODES  KERNEL VERSION
+rocky-8                   0      4.18.0-372.13.1.el8_6.x86_64
+
+
+Listing 7: Modifying Containers on the Head Node:
+-------------------------------------------------
+
+$ sudo wwctl container exec rocky-8 /bin/bash
+[rocky-8] Warewulf> cat /etc/rocky-release
+Rocky Linux release 8.6 (Green Obsidian)
+[rocky-8] Warewulf> exit
+
+
+$ sudo wwctl container list
+
+CONTAINER NAME            NODES  KERNEL VERSION
+rocky-8                   0      4.18.0-372.13.1.el8_6.x86_64
+(You can see the kernel used in the container with the command, Compute nodes need a Linux kernel to boot.)
+
+$ wwctl kernel import $(uname -r)
+4.18.0-305.3.1.el8_4.x86_64: Done
+
+$ sudo wwctl kernel list
+KERNEL NAME                         KERNEL VERSION            NODES
+4.18.0-425.19.2.el8_7.x86_64                                       0
+
+
+
+$ sudo wwctl node list -a
+
+
+
+Adding a node is as simple as:
+------------------------------
+
+
+$ sudo wwctl node add --netdev eth0 --hwaddr XX:XX:XX:XX:XX:XX --ipaddr 10.0.1.1 --netmask 255.0.0.0 n0001
+
+
+$ sudo wwctl node list -a
+
+
+Listing 8: List of Defined Nodes:
+--------------------------------
+
+$ sudo wwctl node list -a
+
+
+
+$ sudo wwctl node set --container rocky-8 n0001
+Are you sure you want to modify 1 nodes(s): y
+
+$ sudo wwctl node list -a  n0001 | grep Container
+n0001                Container          --           rocky-8
+
+
+
+To add packages to the container, exec into the container:
+
+$ sudo wwctl container exec rocky-8 /bin/bash
+[rocky-8] Warewulf>yum install passwd
+[rocky-8] Warewulf> whereis passwd
+passwd: /usr/bin/passwd /etc/passwd /usr/share/man/man1/passwd.1.gz
+[rocky-8] Warewulf> passwd root
+Changing password for user root.
+New password: 
+Retype new password: 
+passwd: all authentication tokens updated successfully.
+[rocky-8] Warewulf> exit
+
+
+Finally Booting Nodes:
+----------------------
+
+$ sudo wwctl configure -a (Enabling Services)
+
+
+$ ssh n0001
+
+
+At this point, you have succesfully configure warewulf provisioning tool.
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+
+Reference links: 1: https://warewulf.org/docs/development/index.html
+			2: https://www.admin-magazine.com/HPC/Articles/Warewulf-4
